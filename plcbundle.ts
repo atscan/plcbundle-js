@@ -266,7 +266,7 @@ const saveBundle = async (
 // ============================================================================
 
 const run = async (): Promise<void> => {
-  const dir = process.argv[2] || './bundles';
+  const dir = process.argv[2] || './plc_bundles';
   
   console.log('PLC Bundle Fetcher');
   console.log('==================');
