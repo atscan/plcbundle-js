@@ -1,4 +1,4 @@
-# PLC Bundle V1 TypeScript Reference Implementation
+# PLC Bundle V1 Reference Implementation in TypeScript
 
 This script ([plcbundle.ts](plcbundle.ts)) is a compact, readable reference implementation for creating PLC Bundle v1 archives. It fetches operations from the PLC directory and generates a complete, verifiable repository of data bundles.
 
