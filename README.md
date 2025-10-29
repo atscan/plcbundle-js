@@ -2,7 +2,7 @@
 
 This set of scripts represents a compact, readable reference implementations for creating [PLC Bundle](https://tangled.org/@atscan.net/plcbundle) v1 archives. It fetches operations from the PLC directory and generates a complete, verifiable repository of data bundles.
 
-It is fully compliant with the [PLC Bundle v1 Specification](https://tangled.org/atscan.net/plcbundle/blob/main/SPECIFICATION.md).
+It is fully compliant with the [PLC Bundle v1 Specification](https://tangled.org/atscan.net/plcbundle/blob/main/docs/specification.md).
 
 ## Features
 
