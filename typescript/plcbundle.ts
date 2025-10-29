@@ -4,7 +4,7 @@
  * requirements, including hashing, serialization, ordering, and boundary handling.
  * 
  * PLC Bundle v1 Specification:
- *   https://github.com/atscan/plcbundle/blob/main/SPECIFICATION.md
+ *   https://tangled.org/atscan.net/plcbundle/blob/main/SPECIFICATION.md
  */
 
 import fs from 'node:fs/promises';

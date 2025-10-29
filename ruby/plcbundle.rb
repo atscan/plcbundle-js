@@ -3,6 +3,9 @@
 
 # plcbundle.rb - Ruby implementation of plcbundle V1 specification
 # Creates compressed, cryptographically-chained bundles of DID PLC operations
+#
+# PLC Bundle v1 Specification:
+#   https://tangled.org/atscan.net/plcbundle/blob/main/SPECIFICATION.md
 
 require 'json'
 require 'digest'
