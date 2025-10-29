@@ -19,7 +19,7 @@ It is fully compliant with the [PLC Bundle v1 Specification](https://github.com/
 
 ## TypeScript
 
-File: [plcbundle.ts](plcbundle.ts)
+File: [`typescript/plcbundle.ts`](typescript/plcbundle.ts)
 
 ### Usage
 
@@ -63,6 +63,12 @@ npx tsc
 node dist/plcbundle.js ./my_plc_bundles
 ```
 
+---
+
 ## Python
+
+File: [`python/plcbundle.py`](python/plcbundle.py)
+
+### Usage
 
 TODO
