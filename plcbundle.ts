@@ -1,14 +1,15 @@
-#!/usr/bin/env node
-
 /**
  * plcbundle.ts - A compact, readable reference implementation for creating
  * plcbundle V1 compliant archives. This script demonstrates all critical spec
  * requirements, including hashing, serialization, ordering, and boundary handling.
+ * 
+ * PLC Bundle v1 Specification:
+ *   https://github.com/atscan/plcbundle/blob/main/SPECIFICATION.md
  */
 
-import fs from 'fs/promises';
-import path from 'path';
-import crypto from 'crypto';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import crypto from 'node:crypto';
 import { init, compress, decompress } from '@bokuweb/zstd-wasm';
 import axios from 'axios';
 
