@@ -16,6 +16,7 @@ It is fully compliant with the [PLC Bundle v1 Specification](https://github.com/
 | ---        | ---       |
 | [TypeScript](#typescript) | [`typescript/plcbundle.ts`](typescript/plcbundle.ts) |
 | [Python](#python) | [`python/plcbundle.py`](python/plcbundle.py) |
+| [Ruby](#ruby) | [`ruby/plcbundle.rb`](ruby/plcbundle.rb) |
 
 ## TypeScript
 
@@ -65,6 +66,8 @@ node dist/plcbundle.js ./my_plc_bundles
 
 ---
 
+
+
 ## Python
 
 File: [`python/plcbundle.py`](python/plcbundle.py)
@@ -72,3 +75,32 @@ File: [`python/plcbundle.py`](python/plcbundle.py)
 ### Usage
 
 TODO
+
+## Ruby
+
+File: [`ruby/plcbundle.rb`](ruby/plcbundle.rb)
+
+### Prerequisites
+
+You need Ruby installed (version 3+ recommended).
+
+### Installation
+
+The script relies on two external gems for HTTP requests and Zstandard compression.
+
+```sh
+# Install required gems
+gem install zstd-ruby
+```
+
+### Usage
+
+Run the script from your terminal. It accepts one optional argument: the path to the output directory.
+
+```sh
+# Run and save bundles to the default './plc_bundles_rb' directory
+ruby plcbundle.rb
+
+# Run and save to a custom directory
+ruby plcbundle.rb ./my_ruby_bundles
+```
