@@ -1,6 +1,6 @@
 # PLC Bundle V1 Reference Implementation in TypeScript
 
-This script ([plcbundle.ts](plcbundle.ts)) is a compact, readable reference implementation for creating PLC Bundle v1 archives. It fetches operations from the PLC directory and generates a complete, verifiable repository of data bundles.
+This script ([plcbundle.ts](plcbundle.ts)) is a compact, readable reference implementation for creating [PLC Bundle](https://github.com/atscan/plcbundle) v1 archives. It fetches operations from the PLC directory and generates a complete, verifiable repository of data bundles.
 
 It is fully compliant with the [PLC Bundle v1 Specification](https://github.com/atscan/plcbundle/blob/main/SPECIFICATION.md).
 
@@ -13,7 +13,7 @@ It is fully compliant with the [PLC Bundle v1 Specification](https://github.com/
 
 ## Usage
 
-This script can be run with **Bun (recommended)**, Deno, or Node.js.
+This script should run well on **[Bun](https://bun.com/) (recommended)**, [Deno](https://deno.com/), or [Node.js](https://nodejs.org/en).
 
 The script accepts one optional argument: the path to the output directory where bundles will be stored. If omitted, it defaults to `./plc_bundles`.
 
