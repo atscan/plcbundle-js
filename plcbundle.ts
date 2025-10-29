@@ -1,33 +1,32 @@
 #!/usr/bin/env node
 
 /**
- * plcbundle.ts - Fetch from PLC Directory and create verifiable bundles
+ * plcbundle.ts - A reference implementation for fetching PLC directory
+ * operations and creating verifiable, chained bundles according to the plcbundle V1 spec.
+ *
+ * This script fetches operations, validates their order, de-duplicates them,
+ * and groups them into 10,000-operation bundles. Each bundle is compressed,
+ * hashed, and cryptographically linked to the previous one, creating a verifiable
+ * chain of data.
  */
 
 import fs from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
-import { fileURLToPath } from 'url';
 import { init, compress, decompress } from '@bokuweb/zstd-wasm';
 import axios from 'axios';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
+// --- Configuration ---
 const BUNDLE_SIZE = 10000;
 const INDEX_FILE = 'plc_bundles.json';
+const DEFAULT_DIR = './plc_bundles';
 const PLC_URL = 'https://plc.directory';
 
-// ============================================================================
-// Types
-// ============================================================================
-
+// --- Types (as per spec) ---
 interface PLCOperation {
-  did: string;
   cid: string;
   createdAt: string;
-  operation: Record<string, any>;
-  nullified?: boolean | string;
-  _raw?: string;
+  _raw: string; // Holds the original raw JSON string for reproducibility.
 }
 
 interface BundleMetadata {
@@ -36,12 +35,13 @@ interface BundleMetadata {
   end_time: string;
   operation_count: number;
   did_count: number;
-  hash: string;
+  hash: string; // The chain hash.
   content_hash: string;
   parent: string;
   compressed_hash: string;
   compressed_size: number;
   uncompressed_size: number;
+  cursor: string;
   created_at: string;
 }
 
@@ -53,359 +53,249 @@ interface Index {
   bundles: BundleMetadata[];
 }
 
-// Initialize zstd
+// --- ZSTD Initialization ---
 await init();
 
-// ============================================================================
-// Index Management
-// ============================================================================
+/**
+ * Manages the state and process of fetching, validating, and creating PLC bundles.
+ */
+class PlcBundleManager {
+  private bundleDir: string;
+  private index!: Index;
+  private mempool: PLCOperation[] = [];
+  // This set is used to de-duplicate operations. It tracks CIDs from the
+  // previous bundle's boundary and all CIDs from the current mempool.
+  private seenCIDs = new Set<string>();
 
-const loadIndex = async (dir: string): Promise<Index> => {
-  try {
-    const data = await fs.readFile(path.join(dir, INDEX_FILE), 'utf8');
-    return JSON.parse(data);
-  } catch (err) {
-    return {
-      version: '1.0',
-      last_bundle: 0,
-      updated_at: new Date().toISOString(),
-      total_size_bytes: 0,
-      bundles: []
-    };
+  constructor(bundleDir: string) {
+    this.bundleDir = bundleDir;
   }
-};
 
-const saveIndex = async (dir: string, index: Index): Promise<void> => {
-  index.updated_at = new Date().toISOString();
-  const indexPath = path.join(dir, INDEX_FILE);
-  const tempPath = indexPath + '.tmp';
-  await fs.writeFile(tempPath, JSON.stringify(index, null, 2));
-  await fs.rename(tempPath, indexPath);
-};
+  /**
+   * Initializes the manager by loading the index and seeding the `seenCIDs`
+   * set with the CIDs from the last saved bundle's boundary.
+   */
+  async init() {
+    await fs.mkdir(this.bundleDir, { recursive: true });
+    this.index = await this._loadIndex();
+    console.log(`plcbundle Reference Implementation\nDirectory: ${this.bundleDir}\n`);
 
-// ============================================================================
-// Bundle Loading
-// ============================================================================
-
-const loadBundle = async (dir: string, bundleNumber: number): Promise<PLCOperation[]> => {
-  const filename = `${String(bundleNumber).padStart(6, '0')}.jsonl.zst`;
-  const filepath = path.join(dir, filename);
-  
-  const compressed = await fs.readFile(filepath);
-  const decompressed = decompress(compressed);
-  const jsonl = Buffer.from(decompressed).toString('utf8');
-  
-  const lines = jsonl.trim().split('\n').filter(l => l);
-  return lines.map(line => {
-    const op = JSON.parse(line) as PLCOperation;
-    op._raw = line;
-    return op;
-  });
-};
-
-// ============================================================================
-// Boundary Handling
-// ============================================================================
-
-const getBoundaryCIDs = (operations: PLCOperation[]): Set<string> => {
-  if (operations.length === 0) return new Set();
-  
-  const lastOp = operations[operations.length - 1];
-  const boundaryTime = lastOp.createdAt;
-  const cidSet = new Set<string>();
-  
-  // Walk backwards from the end to find all operations with the same timestamp
-  for (let i = operations.length - 1; i >= 0; i--) {
-    if (operations[i].createdAt === boundaryTime) {
-      cidSet.add(operations[i].cid);
+    const lastBundle = this.index.bundles.at(-1);
+    if (lastBundle) {
+      console.log(`Resuming from bundle ${lastBundle.bundle_number + 1}. Last op time: ${lastBundle.end_time}`);
+      try {
+        // Pre-seed the de-duplication set with CIDs from the previous bundle's boundary.
+        // This is crucial for preventing duplicates between two adjacent bundles.
+        const prevOps = await this._loadBundleOps(lastBundle.bundle_number);
+        this.seenCIDs = this._getBoundaryCIDs(prevOps);
+        console.log(`  Seeded de-duplication set with ${this.seenCIDs.size} boundary CIDs.`);
+      } catch (e) {
+        console.warn(`  Warning: Could not load previous bundle file. Boundary deduplication may be incomplete.`);
+      }
     } else {
-      break;
+      console.log('Starting from the beginning (genesis bundle).');
     }
   }
-  
-  return cidSet;
-};
 
-const stripBoundaryDuplicates = (
-  operations: PLCOperation[],
-  prevBoundaryCIDs: Set<string>
-): PLCOperation[] => {
-  if (prevBoundaryCIDs.size === 0) return operations;
-  if (operations.length === 0) return operations;
-  
-  const boundaryTime = operations[0].createdAt;
-  let startIdx = 0;
-  
-  // Skip operations that are in the previous bundle's boundary
-  for (let i = 0; i < operations.length; i++) {
-    const op = operations[i];
-    
-    // Stop if we've moved past the boundary timestamp
-    if (op.createdAt > boundaryTime) {
-      break;
-    }
-    
-    // Skip if this CID was in the previous boundary
-    if (op.createdAt === boundaryTime && prevBoundaryCIDs.has(op.cid)) {
-      startIdx = i + 1;
-      continue;
-    }
-    
-    break;
-  }
-  
-  const stripped = operations.slice(startIdx);
-  if (startIdx > 0) {
-    console.log(`    Stripped ${startIdx} boundary duplicates`);
-  }
-  return stripped;
-};
+  /**
+   * The main execution loop. It continuously fetches operations, validates and
+   * de-duplicates them, fills the mempool, and creates bundles when ready.
+   */
+  async run() {
+    let cursor = this.index.bundles.at(-1)?.end_time || null;
 
-// ============================================================================
-// PLC Directory Client
-// ============================================================================
+    while (true) {
+      try {
+        console.log(`\nFetching operations from cursor: ${cursor || 'start'}...`);
+        const fetchedOps = await this._fetchOperations(cursor);
 
-const fetchOperations = async (after: string | null, count: number = 1000): Promise<PLCOperation[]> => {
-  const params: Record<string, any> = { count };
-  if (after) {
-    params.after = after;
-  }
-  
-  const response = await axios.get<string>(`${PLC_URL}/export`, {
-    params,
-    responseType: 'text'
-  });
-  
-  const lines = response.data.trim().split('\n').filter(l => l);
-  
-  return lines.map(line => {
-    const op = JSON.parse(line) as PLCOperation;
-    op._raw = line; // Preserve exact JSON
-    return op;
-  });
-};
+        if (fetchedOps.length === 0) {
+          console.log('No more operations available from PLC directory.');
+          break;
+        }
+        
+        // The core ingestion logic: de-duplicate and validate operations before adding to the mempool.
+        this._processAndValidateOps(fetchedOps);
+        
+        // The cursor for the next fetch is always the timestamp of the last operation received in the current batch.
+        cursor = fetchedOps[fetchedOps.length - 1].createdAt;
 
-// ============================================================================
-// Bundle Operations
-// ============================================================================
+        // If the mempool is full enough, create bundles. This can run multiple times per fetch.
+        while (this.mempool.length >= BUNDLE_SIZE) {
+          await this._createAndSaveBundle();
+        }
 
-const serializeJSONL = (operations: PLCOperation[]): string => {
-  const lines = operations.map(op => {
-    const json = op._raw || JSON.stringify(op);
-    return json + '\n';
-  });
-  return lines.join('');
-};
-
-const sha256 = (data: Buffer | string): string => {
-  return crypto.createHash('sha256').update(data).digest('hex');
-};
-
-const calculateChainHash = (parent: string, contentHash: string): string => {
-  let data: string;
-  if (!parent || parent === '') {
-    data = `plcbundle:genesis:${contentHash}`;
-  } else {
-    data = `${parent}:${contentHash}`;
-  }
-  return sha256(data);
-};
-
-const extractUniqueDIDs = (operations: PLCOperation[]): number => {
-  const dids = new Set<string>();
-  operations.forEach(op => dids.add(op.did));
-  return dids.size;
-};
-
-const saveBundle = async (
-  dir: string,
-  bundleNumber: number,
-  operations: PLCOperation[],
-  parentHash: string
-): Promise<BundleMetadata> => {
-  const filename = `${String(bundleNumber).padStart(6, '0')}.jsonl.zst`;
-  const filepath = path.join(dir, filename);
-  
-  const jsonl = serializeJSONL(operations);
-  const uncompressedBuffer = Buffer.from(jsonl, 'utf8');
-  
-  const contentHash = sha256(uncompressedBuffer);
-  const uncompressedSize = uncompressedBuffer.length;
-  
-  const chainHash = calculateChainHash(parentHash, contentHash);
-  
-  const compressed = compress(uncompressedBuffer, 3);
-  const compressedBuffer = Buffer.from(compressed);
-  const compressedHash = sha256(compressedBuffer);
-  const compressedSize = compressedBuffer.length;
-  
-  await fs.writeFile(filepath, compressedBuffer);
-  
-  const startTime = operations[0].createdAt;
-  const endTime = operations[operations.length - 1].createdAt;
-  const didCount = extractUniqueDIDs(operations);
-  
-  return {
-    bundle_number: bundleNumber,
-    start_time: startTime,
-    end_time: endTime,
-    operation_count: operations.length,
-    did_count: didCount,
-    hash: chainHash,
-    content_hash: contentHash,
-    parent: parentHash || '',
-    compressed_hash: compressedHash,
-    compressed_size: compressedSize,
-    uncompressed_size: uncompressedSize,
-    created_at: new Date().toISOString()
-  };
-};
-
-// ============================================================================
-// Main Logic
-// ============================================================================
-
-const run = async (): Promise<void> => {
-  const dir = process.argv[2] || './plc_bundles';
-  
-  console.log('PLC Bundle Fetcher');
-  console.log('==================');
-  console.log();
-  console.log(`Directory: ${dir}`);
-  console.log(`Source:    ${PLC_URL}`);
-  console.log();
-  
-  await fs.mkdir(dir, { recursive: true });
-  
-  const index = await loadIndex(dir);
-  
-  let currentBundle = index.last_bundle + 1;
-  let cursor: string | null = null;
-  let parentHash = '';
-  let prevBoundaryCIDs = new Set<string>();
-  
-  if (index.bundles.length > 0) {
-    const lastBundle = index.bundles[index.bundles.length - 1];
-    cursor = lastBundle.end_time;
-    parentHash = lastBundle.hash;
-    
-    try {
-      const prevOps = await loadBundle(dir, lastBundle.bundle_number);
-      prevBoundaryCIDs = getBoundaryCIDs(prevOps);
-      console.log(`Loaded previous bundle boundary: ${prevBoundaryCIDs.size} CIDs`);
-    } catch (err) {
-      console.log(`Could not load previous bundle for boundary detection`);
-    }
-    
-    console.log(`Resuming from bundle ${currentBundle}`);
-    console.log(`Last operation: ${cursor}`);
-  } else {
-    console.log('Starting from the beginning (genesis)');
-  }
-  
-  console.log();
-  
-  let mempool: PLCOperation[] = [];
-  const seenCIDs = new Set<string>(prevBoundaryCIDs);
-  let totalFetched = 0;
-  let totalBundles = 0;
-  
-  while (true) {
-    try {
-      console.log(`Fetching operations (cursor: ${cursor || 'start'})...`);
-      const operations = await fetchOperations(cursor, 1000);
-      
-      if (operations.length === 0) {
-        console.log('No more operations available');
+        await new Promise(resolve => setTimeout(resolve, 200)); // Be nice to the server.
+      } catch (err: any) {
+        console.error(`\nError: ${err.message}`);
+        if (err.response) console.error(`HTTP Status: ${err.response.status}`);
+        if (['ECONNRESET', 'ECONNABORTED'].includes(err.code)) {
+          console.log('Connection error, retrying in 5 seconds...');
+          await new Promise(resolve => setTimeout(resolve, 5000));
+          continue;
+        }
         break;
       }
-      
-      // Deduplicate
-      const uniqueOps = operations.filter(op => {
-        if (seenCIDs.has(op.cid)) {
-          return false;
-        }
-        seenCIDs.add(op.cid);
-        return true;
-      });
-      
-      console.log(`  Fetched ${operations.length} operations (${uniqueOps.length} unique)`);
-      totalFetched += uniqueOps.length;
-      
-      mempool.push(...uniqueOps);
-      cursor = operations[operations.length - 1].createdAt;
-      
-      while (mempool.length >= BUNDLE_SIZE) {
-        const bundleOps = mempool.splice(0, BUNDLE_SIZE);
-        
-        console.log(`\nCreating bundle ${String(currentBundle).padStart(6, '0')}...`);
-        
-        const metadata = await saveBundle(dir, currentBundle, bundleOps, parentHash);
-        
-        index.bundles.push(metadata);
-        index.last_bundle = currentBundle;
-        index.total_size_bytes += metadata.compressed_size;
-        
-        await saveIndex(dir, index);
-        
-        console.log(`  ✓ Bundle ${String(currentBundle).padStart(6, '0')}: ${metadata.operation_count} ops, ${metadata.did_count} DIDs`);
-        console.log(`    Chain Hash:   ${metadata.hash}`);
-        console.log(`    Content Hash: ${metadata.content_hash}`);
-        console.log(`    Size: ${(metadata.compressed_size / 1024).toFixed(1)} KB`);
-        
-        // Get boundary CIDs for next bundle
-        prevBoundaryCIDs = getBoundaryCIDs(bundleOps);
-        console.log(`    Boundary CIDs: ${prevBoundaryCIDs.size}`);
-        console.log();
-        
-        parentHash = metadata.hash;
-        currentBundle++;
-        totalBundles++;
-      }
-      
-      await new Promise(resolve => setTimeout(resolve, 100));
-      
-    } catch (err: any) {
-      console.error(`Error: ${err.message}`);
-      
-      if (err.response) {
-        console.error(`HTTP Status: ${err.response.status}`);
-      }
-      
-      if (err.code === 'ECONNRESET' || err.code === 'ECONNABORTED') {
-        console.log('Connection error, retrying in 5 seconds...');
-        await new Promise(resolve => setTimeout(resolve, 5000));
+    }
+
+    await this._saveIndex();
+    console.log(`\n---`);
+    console.log('Process complete.');
+    console.log(`Total bundles in index: ${this.index.bundles.length}`);
+    console.log(`Operations in mempool: ${this.mempool.length}`);
+    console.log(`Total size: ${(this.index.total_size_bytes / 1024 / 1024).toFixed(2)} MB`);
+  }
+  
+  // ==========================================================================
+  // Private Helper Methods
+  // ==========================================================================
+
+  private async _fetchOperations(after: string | null): Promise<PLCOperation[]> {
+    const params = { count: 1000, ...(after && { after }) };
+    const response = await axios.get<string>(`${PLC_URL}/export`, { params, responseType: 'text' });
+    const lines = response.data.trimEnd().split('\n');
+    if (lines.length === 1 && lines[0] === '') return [];
+    // Important: The `_raw` property is added here to preserve the original JSON string,
+    // ensuring byte-for-byte reproducibility as required by Spec 4.2.
+    return lines.map(line => ({ ...JSON.parse(line), _raw: line }));
+  }
+
+  /**
+   * Processes a batch of fetched operations. It ensures each operation is unique
+   * (both within the batch and across bundle boundaries) and that it maintains
+   * chronological order before adding it to the mempool.
+   */
+  private _processAndValidateOps(ops: PLCOperation[]) {
+    // The timestamp to validate against is the last operation in the mempool, or if empty,
+    // the end time of the last bundle. This prevents chronological gaps.
+    let lastTimestamp = this.mempool.at(-1)?.createdAt || this.index.bundles.at(-1)?.end_time || '';
+    let newOpsCount = 0;
+
+    for (const op of ops) {
+      // The `seenCIDs` set efficiently handles duplicates from the previous bundle's
+      // boundary as well as any duplicates within the current fetched batch.
+      if (this.seenCIDs.has(op.cid)) {
         continue;
       }
+
+      // Spec 3: Validate that the stream is chronological. This is a critical sanity check.
+      if (op.createdAt < lastTimestamp) {
+        throw new Error(`Chronological validation failed: op ${op.cid} at ${op.createdAt} is older than last op at ${lastTimestamp}`);
+      }
       
-      break;
+      this.mempool.push(op);
+      this.seenCIDs.add(op.cid); // Add the CID to the set only after it's confirmed valid.
+      lastTimestamp = op.createdAt;
+      newOpsCount++;
+    }
+    console.log(`  Added ${newOpsCount} new operations to mempool.`);
+  }
+
+  /**
+   * Takes 10,000 operations from the mempool, creates a bundle file, generates
+   * its metadata according to the spec, and updates the index.
+   */
+  private async _createAndSaveBundle() {
+    const currentBundleNumber = this.index.last_bundle + 1;
+    const bundleOps = this.mempool.splice(0, BUNDLE_SIZE);
+
+    const parentHash = this.index.bundles.at(-1)?.hash || '';
+    const previousCursor = this.index.bundles.at(-1)?.end_time || '';
+
+    // The hashing and serialization process follows the spec exactly to ensure compatibility.
+    const jsonl = PlcBundleManager._serializeJSONL(bundleOps);
+    const uncompressedBuffer = Buffer.from(jsonl, 'utf8');
+    const contentHash = PlcBundleManager._sha256(uncompressedBuffer);
+    const chainHash = PlcBundleManager._calculateChainHash(parentHash, contentHash);
+    const compressedBuffer = Buffer.from(compress(uncompressedBuffer, 3));
+    
+    const filename = `${String(currentBundleNumber).padStart(6, '0')}.jsonl.zst`;
+    await fs.writeFile(path.join(this.bundleDir, filename), compressedBuffer);
+
+    const dids = new Set(bundleOps.map(op => JSON.parse(op._raw).did));
+    const metadata: BundleMetadata = {
+      bundle_number: currentBundleNumber,
+      start_time: bundleOps[0].createdAt,
+      end_time: bundleOps[bundleOps.length - 1].createdAt,
+      operation_count: bundleOps.length,
+      did_count: dids.size,
+      hash: chainHash,
+      content_hash: contentHash,
+      parent: parentHash,
+      compressed_hash: PlcBundleManager._sha256(compressedBuffer),
+      compressed_size: compressedBuffer.length,
+      uncompressed_size: uncompressedBuffer.length,
+      cursor: previousCursor,
+      created_at: new Date().toISOString()
+    };
+
+    this.index.bundles.push(metadata);
+    this.index.last_bundle = currentBundleNumber;
+    this.index.total_size_bytes += metadata.compressed_size;
+    
+    // Prune the `seenCIDs` set to keep it memory-efficient. It only needs to hold CIDs
+    // from the new boundary and the remaining mempool, not all CIDs ever seen.
+    const newBoundaryCIDs = this._getBoundaryCIDs(bundleOps);
+    const mempoolCIDs = new Set(this.mempool.map(op => op.cid));
+    this.seenCIDs = new Set([...newBoundaryCIDs, ...mempoolCIDs]);
+
+    await this._saveIndex();
+    console.log(`\nCreating bundle ${filename}...`);
+    console.log(`  ✓ Saved. Hash: ${metadata.hash.substring(0, 16)}...`);
+    console.log(`    Set new boundary with ${newBoundaryCIDs.size} CIDs. Pruned de-duplication set to ${this.seenCIDs.size} CIDs.`);
+  }
+  
+  private async _loadIndex(): Promise<Index> {
+    try {
+      const data = await fs.readFile(path.join(this.bundleDir, INDEX_FILE), 'utf8');
+      return JSON.parse(data);
+    } catch (err) {
+      return { version: '1.0', last_bundle: 0, updated_at: '', total_size_bytes: 0, bundles: [] };
     }
   }
-  
-  await saveIndex(dir, index);
-  
-  console.log();
-  console.log('================');
-  console.log('Complete!');
-  console.log('================');
-  console.log(`Total operations fetched: ${totalFetched}`);
-  console.log(`Bundles created: ${totalBundles}`);
-  console.log(`Total bundles: ${index.bundles.length}`);
-  console.log(`Mempool: ${mempool.length} operations`);
-  console.log(`Total size: ${(index.total_size_bytes / 1024 / 1024).toFixed(1)} MB`);
-  
-  if (mempool.length > 0) {
-    console.log();
-    console.log(`Note: ${mempool.length} operations in mempool`);
+
+  private async _saveIndex(): Promise<void> {
+    this.index.updated_at = new Date().toISOString();
+    const tempPath = path.join(this.bundleDir, INDEX_FILE + '.tmp');
+    await fs.writeFile(tempPath, JSON.stringify(this.index, null, 2));
+    await fs.rename(tempPath, path.join(this.bundleDir, INDEX_FILE));
   }
-};
+  
+  private async _loadBundleOps(bundleNumber: number): Promise<PLCOperation[]> {
+    const filename = `${String(bundleNumber).padStart(6, '0')}.jsonl.zst`;
+    const filepath = path.join(this.bundleDir, filename);
+    const compressed = await fs.readFile(filepath);
+    const decompressed = Buffer.from(decompress(compressed)).toString('utf8');
+    return decompressed.trimEnd().split('\n').map(line => ({...JSON.parse(line), _raw: line}));
+  }
 
-// ============================================================================
-// Entry Point
-// ============================================================================
+  /** Returns CIDs from the last timestamp of a bundle, used for boundary de-duplication. */
+  private _getBoundaryCIDs(ops: PLCOperation[]): Set<string> {
+    if (!ops.length) return new Set();
+    const lastTime = ops.at(-1)!.createdAt;
+    const cids = new Set<string>();
+    for (let i = ops.length - 1; i >= 0 && ops[i].createdAt === lastTime; i--) {
+      cids.add(ops[i].cid);
+    }
+    return cids;
+  }
+  
+  // --- Static Utilities ---
+  private static _sha256 = (data: string | Buffer): string => crypto.createHash('sha256').update(data).digest('hex');
+  private static _serializeJSONL = (ops: PLCOperation[]): string => ops.map(op => op._raw + '\n').join('');
+  private static _calculateChainHash = (parent: string, contentHash: string): string => {
+    return PlcBundleManager._sha256(parent ? `${parent}:${contentHash}` : `plcbundle:genesis:${contentHash}`);
+  };
+}
 
-run().catch(err => {
-  console.error('Fatal error:', err.message);
+// --- Entry Point ---
+(async () => {
+  const dir = process.argv[2] || DEFAULT_DIR;
+  const manager = new PlcBundleManager(dir);
+  await manager.init();
+  await manager.run();
+})().catch(err => {
+  console.error('\nFATAL ERROR:', err.message);
   console.error(err.stack);
   process.exit(1);
 });
