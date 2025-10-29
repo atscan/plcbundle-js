@@ -13,7 +13,7 @@ It is fully compliant with the [PLC Bundle v1 Specification](https://github.com/
 
 ## Usage
 
-This script should run well on **[Bun](https://bun.com/) (recommended)**, [Deno](https://deno.com/), or [Node.js](https://nodejs.org/en).
+This script should run well with **[Bun](https://bun.com/) (recommended)**, [Deno](https://deno.com/), or [Node.js](https://nodejs.org/en).
 
 The script accepts one optional argument: the path to the output directory where bundles will be stored. If omitted, it defaults to `./plc_bundles`.
 
