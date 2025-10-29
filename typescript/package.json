@@ -12,9 +12,10 @@
   "license": "ISC",
   "dependencies": {
     "@bokuweb/zstd-wasm": "^0.0.27",
-    "axios": "^1.13.0"
-  },
-  "devDependencies": {
+    "axios": "^1.13.0",
     "@types/node": "^24.9.2"
+  },
+  "compilerOptions": {
+    "module": "node20"
   }
 }
