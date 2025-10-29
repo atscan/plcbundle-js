@@ -1,23 +1,33 @@
-# PLC Bundle V1 Reference Implementation in TypeScript
+# PLC Bundle V1 Reference Implementations
 
-This script ([plcbundle.ts](plcbundle.ts)) is a compact, readable reference implementation for creating [PLC Bundle](https://github.com/atscan/plcbundle) v1 archives. It fetches operations from the PLC directory and generates a complete, verifiable repository of data bundles.
+This set of scripts represents a compact, readable reference implementations for creating [PLC Bundle](https://github.com/atscan/plcbundle) v1 archives. It fetches operations from the PLC directory and generates a complete, verifiable repository of data bundles.
 
 It is fully compliant with the [PLC Bundle v1 Specification](https://github.com/atscan/plcbundle/blob/main/SPECIFICATION.md).
 
 ## Features
 
 -   **Spec Compliant:** Correctly implements hashing, chaining, serialization, and boundary de-duplication.
--   **Reproducible:** Generates byte-for-byte identical bundles to the official Go implementation.
--   **Efficient:** Uses a memory-efficient method to handle duplicates between bundle boundaries.
+-   **Reproducible:** Generates byte-for-byte identical bundles to the other implementations.
 -   **Standalone:** Single-file script with clear dependencies.
 
-## Usage
+## Implementations
+
+| Language   | File      |
+| ---        | ---       |
+| [TypeScript](#typescript) | [`typescript/plcbundle.ts`](typescript/plcbundle.ts) |
+| [Python](#python) | [`python/plcbundle.py`](python/plcbundle.py) |
+
+## TypeScript
+
+File: [plcbundle.ts](plcbundle.ts)
+
+### Usage
 
 This script should run well with **[Bun](https://bun.com/) (recommended)**, [Deno](https://deno.com/), or [Node.js](https://nodejs.org/en).
 
 The script accepts one optional argument: the path to the output directory where bundles will be stored. If omitted, it defaults to `./plc_bundles`.
 
-### Bun (Recommended)
+#### Bun (Recommended)
 
 Bun is the fastest and easiest way to run this script, as it handles TypeScript and dependencies automatically.
 
@@ -29,7 +39,7 @@ bun install
 bun run plcbundle.ts ./my_plc_bundles
 ```
 
-### Deno
+#### Deno
 
 Deno can also run the script directly. You will need to provide permissions for network access and file system I/O.
 
@@ -38,7 +48,7 @@ Deno can also run the script directly. You will need to provide permissions for 
 deno run --allow-net --allow-read --allow-write plcbundle.ts ./my_plc_bundles
 ```
 
-### Node.js (with TypeScript)
+#### Node.js (with TypeScript)
 
 If using Node.js, you must first install dependencies and compile the TypeScript file to JavaScript.
 
@@ -53,3 +63,6 @@ npx tsc
 node dist/plcbundle.js ./my_plc_bundles
 ```
 
+## Python
+
+TODO
