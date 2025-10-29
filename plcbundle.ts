@@ -15,7 +15,7 @@ import axios from 'axios';
 // --- Configuration ---
 const BUNDLE_SIZE = 10000;
 const INDEX_FILE = 'plc_bundles.json';
-const DEFAULT_DIR = './plc_bundles_ts';
+const DEFAULT_DIR = './plc_bundles';
 const PLC_URL = 'https://plc.directory';
 
 // --- Types (as per spec) ---
